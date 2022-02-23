@@ -1,6 +1,7 @@
-import codecs
 import requests
 import pandas as pd
+import random
+import datetime
 
 from preprocessing import Processor
 
@@ -83,11 +84,15 @@ class DataFetcher():
             print(f"Could not find {value}.")
             # print(e)
     
-    def create_dataset(self, bdate, edate, site=None, county=None, state=None, processed=True, verbose=False):
-        codes = [self.find_code(v) for v in [*CRITERIA_POLLUTANTS, *MET_VARS]]
-        dct = {codes[i]: [*CRITERIA_POLLUTANTS, *MET_VARS][i] for i in range(len(codes))}
+    def create_dataset(self, bdate, edate, site=None, county=None, state=None, processed=True, verbose=False, vocs=False):
+        code_names = [*CRITERIA_POLLUTANTS, *MET_VARS]
+        if vocs:
+            voc_code_names = [self.all_codes.loc[code]['value_represented'] for code in self.voc_codes]
+            code_names += voc_code_names
         
-        # NOTE: Not doing VOCs yet
+        codes = [self.find_code(v) for v in code_names]
+        dct = {codes[i]: code_names[i] for i in range(len(codes))}
+
         dfs = []
         if state:
             if county:
@@ -114,34 +119,57 @@ class DataFetcher():
         
         return self.processor.join(dfs)
     
-    def find_best_location(self, state='06', county='037', bdate=20180101, edate=20180102):
+    def find_best_location(self, state='06', county='037', bdate=20000101, edate=20210101):
         """
         Go through all sites in los angeles county and find site with the most dfs
         """
         print(f"Searching county {county} in state {state}...", end=" ")
-        
         sites = self.get_codes(LIST_SITES_BY_COUNTY, all=True, nparams={'state':state, 'county':county})
         sites = [(site['code'], site['value_represented']) for site in sites if site['value_represented']]
-        
         print(f"Found {len(sites)} sites.")
 
-        codes = [self.find_code(v) for v in [*CRITERIA_POLLUTANTS, *MET_VARS]]
-
+        codes = [self.find_code(v) for v in [*CRITERIA_POLLUTANTS , *MET_VARS, *PAMS]]
+        sample_days = [self.sample_day_in_year(year, year + 10000) for year in range(bdate, edate, 50000)]
+        # sample_days = [(i, i+1130) for i in range(20000101, 20210101, 50000)]
         res = {}
+        res['Data'] = {}
+        res['Metadata'] = {'dates':sample_days, 'codes':codes}
         for site, name in sites:
-            res[name] = []
+            res['Data'][name] = []
             for code in codes:
-                try:
-                    df = self.get_data(SAMPLE_DATA_BY_SITE, code, bdate, edate, df = True, nparams={'state':state, 'county':county, 'site': site})
-
-                    if df.empty:
-                        res[name].append(0)
-                    else:
-                        res[name].append(1)
-                except:
-                    res[name].append(-1)
+                year_res = [self.find_data_availability(site, county, state, code, bdate, edate) for bdate, edate in sample_days]
+                res['Data'][name].append(year_res)
+            print(f"Finished site {site}, {name}")
         
         return res
+    
+    def find_data_availability(self, site, county, state, code, bdate, edate):
+        try:
+            df = self.get_data(SAMPLE_DATA_BY_SITE, code, bdate, edate, df = True, nparams={'state':state, 'county':county, 'site': site})
+            return not (df.empty)
+        except:
+            return -1
+    
+    def find_voc_availability(self, sites, sites_codes, dates, state='06', county='037'):
+        codes = [r['code'] for r in self.get_codes(LIST_PARAM_IN_CLASS, all=True, nparams={'pc':'PAMS_VOC'})]
+        self.voc_codes = codes 
+
+        res = {}
+        res['Data'] = {}
+        res['Metadata'] = {'dates':dates, 'codes':codes}
+        for name, site, site_dates in zip(sites, sites_codes, dates):
+            res['Data'][name] = []
+            for code in codes:
+                year_res = [self.find_data_availability(site, county, state, code, site_date[0], site_date[1]) for site_date in site_dates]
+                res['Data'][name].append(year_res)
+            print(f"Finished site {site}, {name}")
+        
+        return res
+    
+    def sample_day_in_year(self, bdate, edate):
+        # Sample random day in every year
+        sample_date = random.choice(pd.date_range(start=str(bdate), end=str(edate)))
+        return sample_date.date().strftime("%Y%m%d"), (sample_date.date() + datetime.timedelta(1)).strftime("%Y%m%d")
 
 
 ### =========================VARIABLES============================== ###
@@ -154,6 +182,6 @@ class DataFetcher():
 # CRITERIA_POLLUTANTS = ["Carbon monoxide", "Sulfur dioxide", "Nitrogen dioxide (NO2)", "Ozone", "PM2.5 - Local Conditions"]
 
 CRITERIA_POLLUTANTS = ["Carbon monoxide", "Nitrogen dioxide (NO2)", "Ozone", "PM2.5 - Local Conditions"]
-
-
-MET_VARS = ["Wind Direction - Resultant", "Mixing Height", "Outdoor Temperature", "Relative Humidity ", "Solar radiation", "Ultraviolet radiation", "Barometric pressure", "Rain/melt precipitation"] 
+PAMS = ["Nitric oxide (NO)", "Oxides of nitrogen (NOx)"]
+MET_VARS = ["Wind Direction - Resultant", "Wind Speed - Resultant", "Outdoor Temperature", "Relative Humidity ", "Solar radiation", "Ultraviolet radiation", "Barometric pressure"] 
+# NOTE: Excluded  "Mixing Height" and rain
