@@ -40,11 +40,14 @@ class Processor():
     
     def process(self, df, measurement):
         df['datetime'] = pd.to_datetime(df['date_local'] + ' ' + df['time_local'])
-        df.set_index('datetime', inplace=True)
-        df = df[['sample_measurement']]
+        df = df[['datetime', 'sample_measurement', 'latitude', 'longitude']]
+        df.set_index(['datetime'], inplace=True)
         df = df.rename({'sample_measurement': measurement}, axis=1)
         return df
         
     def join(self, dfs):
         df = dfs[0].join(dfs[1:], how='outer')
+        df = df.drop([x for x in df.columns if (('latitude' in x) and (x != 'latitude'))], axis=1)
+        df = df.drop([x for x in df.columns if (('longitude' in x) and (x != 'longitude'))], axis=1)
+        df = df.resample('1h').mean()
         return df

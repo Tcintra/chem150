@@ -2,6 +2,10 @@ import requests
 import pandas as pd
 import random
 import datetime
+from dateutil.relativedelta import relativedelta
+import numpy as np
+import netCDF4 as nc
+from bs4 import BeautifulSoup
 
 from preprocessing import Processor
 
@@ -170,7 +174,59 @@ class DataFetcher():
         # Sample random day in every year
         sample_date = random.choice(pd.date_range(start=str(bdate), end=str(edate)))
         return sample_date.date().strftime("%Y%m%d"), (sample_date.date() + datetime.timedelta(1)).strftime("%Y%m%d")
+    
+    ### CEDS DATA ###
 
+    # Get all URLS
+    def get_ceds_links(self, year='2018'):
+        url = 'http://ftp.as.harvard.edu/gcgrid/data/ExtData/HEMCO/CEDS/v2021-06/' + year + '/'
+        self.ceds_url = url
+        r = requests.get(url)
+        soup = BeautifulSoup(r.text, "html.parser")
+        links = []
+        for link in soup.findAll('a'):
+            links.append(link.get('href'))
+        nc_links = links[5:]
+        self.nc_links = nc_links
+        return nc_links, url
+    
+    def save_ceds_ncs(self):
+        if self.nc_links:
+            for endpoint in self.nc_links:
+                r = requests.get(self.ceds_url + endpoint)
+                open('./data/2018/' + endpoint, 'wb').write(r.content)
+
+    def get_compound_df(path, site_lat, site_lon):
+        ds = nc.Dataset(path, format="NETCDF4")
+        lat_idx = np.where(ds.variables['lat'][:] == site_lat)
+        lon_idx = np.where(ds.variables['lon'][:] == site_lon)
+        
+        data = []
+        for var in ds.variables:
+            if var not in ['time', 'lat', 'lon']:
+                data.append(ds.variables[var][:][:, lat_idx, lon_idx].flatten())
+        
+        data = np.asarray(data).T
+        df = pd.DataFrame(data, columns = [x for x in ds.variables if x not in ['time', 'lat', 'lon']])
+        df.index = ds.variables['time'][:]
+        return df
+
+    def make_ceds_df(lat, lon, nc_links):
+        dfs = []
+        for endpoint in nc_links:
+            df = DataFetcher.get_compound_df('./data/2018/' + endpoint, lat, lon)
+            dfs.append(df)
+
+        full_df = dfs[0].join(dfs[1:], how='outer')
+
+        # NOTE: Not sure how to convert to timestamp so I will just convert to the first of the month for the given year
+        start = datetime.datetime(2018, 1, 1, 0, 0)
+        dates = [start + relativedelta(months=i) for i in range(0, 12)]
+        full_df.index = dates 
+        full_df.loc[datetime.datetime(2018, 12, 31, 23, 0)] = full_df.loc[datetime.datetime(2018, 12, 1)] # Repeat last row
+        full_df = full_df.asfreq(freq='1h', method='ffill')
+
+        return full_df
 
 ### =========================VARIABLES============================== ###
 
