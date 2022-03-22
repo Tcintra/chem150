@@ -88,6 +88,15 @@ class DataFetcher():
             print(f"Could not find {value}.")
             # print(e)
     
+    def find_name(self, code):
+        # Look for code in self.all_codes
+        try:
+            code = self.all_codes.loc[code].value_represented
+            return code
+        except Exception as e:
+            print(f"Could not find {code}.")
+            # print(e)
+    
     def create_dataset(self, bdate, edate, site=None, county=None, state=None, processed=True, verbose=False, vocs=False):
         code_names = [*CRITERIA_POLLUTANTS, *MET_VARS]
         if vocs:
@@ -174,6 +183,22 @@ class DataFetcher():
         # Sample random day in every year
         sample_date = random.choice(pd.date_range(start=str(bdate), end=str(edate)))
         return sample_date.date().strftime("%Y%m%d"), (sample_date.date() + datetime.timedelta(1)).strftime("%Y%m%d")
+
+    def get_voc_data(self, bdate, edate, state, county, site, vocs):
+        dfs = []
+        for voc in vocs:
+            code = self.find_code(voc)
+            df = self.get_data(SAMPLE_DATA_BY_SITE, code, bdate, edate, df=True, nparams={'state':state, 'county':county, 'site': site})
+
+            if df.empty:
+                print(f"No data for {voc}")
+                continue
+            
+            df = self.processor.process(df, voc, change_freq=True, select_method=True, drop_lat_lon=True)
+            dfs.append(df)
+        
+        return self.processor.join(dfs)
+
     
     ### CEDS DATA ###
 
@@ -188,6 +213,8 @@ class DataFetcher():
             links.append(link.get('href'))
         nc_links = links[5:]
         self.nc_links = nc_links
+        self.ceds_compounds = [x.replace('-em-anthro_CMIP_CEDS_2018.nc', '') for x in nc_links]
+        self.ceds_vocs_names = []
         return nc_links, url
     
     def save_ceds_ncs(self):
@@ -196,10 +223,15 @@ class DataFetcher():
                 r = requests.get(self.ceds_url + endpoint)
                 open('./data/2018/' + endpoint, 'wb').write(r.content)
 
-    def get_compound_df(path, site_lat, site_lon):
+    def get_compound_df(self, path, site_lat, site_lon):
         ds = nc.Dataset(path, format="NETCDF4")
         lat_idx = np.where(ds.variables['lat'][:] == site_lat)
         lon_idx = np.where(ds.variables['lon'][:] == site_lon)
+
+        try: 
+            self.ceds_vocs_names.append(ds.__dict__['VOC_name'])
+        except:
+            print(f"No VOC_name attribute for {path}")
         
         data = []
         for var in ds.variables:
@@ -211,10 +243,10 @@ class DataFetcher():
         df.index = ds.variables['time'][:]
         return df
 
-    def make_ceds_df(lat, lon, nc_links):
+    def make_ceds_df(self, lat, lon, nc_links):
         dfs = []
         for endpoint in nc_links:
-            df = DataFetcher.get_compound_df('./data/2018/' + endpoint, lat, lon)
+            df = self.get_compound_df('./data/2018/' + endpoint, lat, lon)
             dfs.append(df)
 
         full_df = dfs[0].join(dfs[1:], how='outer')
@@ -227,17 +259,23 @@ class DataFetcher():
         full_df = full_df.asfreq(freq='1h', method='ffill')
 
         return full_df
+    
+    def aggregate_ceds_data(self, df):
+        """
+        Aggregates data for different sectors for each compound so we only have one column per compound.
+        """
+        ndf = df.copy()
+        for compound in self.ceds_compounds:
+            cols = [col for col in df.columns if (compound + '_' in col) and (col.startswith(compound))]
+            if len(cols) != 8:
+                raise("Not properly aggregating columns.")
+            compound_aggregated = df[cols].sum(axis=1)
+            ndf = ndf.drop(cols, axis=1)
+            ndf[compound] = compound_aggregated
+        return ndf
 
 ### =========================VARIABLES============================== ###
-
-# NOTE: Do I have the correct wind variable?
-# NOTE: Mixing speed?
-# NOTE: Types of radiation?
-# NOTE: Barometric or ambient pressure?
-
-# CRITERIA_POLLUTANTS = ["Carbon monoxide", "Sulfur dioxide", "Nitrogen dioxide (NO2)", "Ozone", "PM2.5 - Local Conditions"]
 
 CRITERIA_POLLUTANTS = ["Carbon monoxide", "Nitrogen dioxide (NO2)", "Ozone", "PM2.5 - Local Conditions"]
 PAMS = ["Nitric oxide (NO)", "Oxides of nitrogen (NOx)"]
 MET_VARS = ["Wind Direction - Resultant", "Wind Speed - Resultant", "Outdoor Temperature", "Relative Humidity ", "Solar radiation", "Ultraviolet radiation", "Barometric pressure"] 
-# NOTE: Excluded  "Mixing Height" and rain

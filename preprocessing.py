@@ -38,11 +38,17 @@ class Processor():
 
         return df
     
-    def process(self, df, measurement):
+    def process(self, df, measurement, change_freq=False, select_method=False, drop_lat_lon=False):
+        if select_method:
+            df = df.loc[df['method'] == df['method'].unique()[0]].copy()
         df['datetime'] = pd.to_datetime(df['date_local'] + ' ' + df['time_local'])
         df = df[['datetime', 'sample_measurement', 'latitude', 'longitude']]
-        df.set_index(['datetime'], inplace=True)
         df = df.rename({'sample_measurement': measurement}, axis=1)
+        df.set_index(['datetime'], inplace=True)
+        if change_freq:
+            df = df.asfreq('1h', method='ffill')
+        if drop_lat_lon:
+            df = df.drop(['latitude', 'longitude'], axis=1)
         return df
         
     def join(self, dfs):
