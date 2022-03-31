@@ -213,8 +213,7 @@ class DataFetcher():
             links.append(link.get('href'))
         nc_links = links[5:]
         self.nc_links = nc_links
-        self.ceds_compounds = [x.replace('-em-anthro_CMIP_CEDS_2018.nc', '') for x in nc_links]
-        self.ceds_vocs_names = []
+        self.ceds_compounds = {}
         return nc_links, url
     
     def save_ceds_ncs(self):
@@ -223,15 +222,15 @@ class DataFetcher():
                 r = requests.get(self.ceds_url + endpoint)
                 open('./data/2018/' + endpoint, 'wb').write(r.content)
 
-    def get_compound_df(self, path, site_lat, site_lon):
+    def get_compound_df(self, path, site_lat, site_lon, endpoint):
         ds = nc.Dataset(path, format="NETCDF4")
         lat_idx = np.where(ds.variables['lat'][:] == site_lat)
         lon_idx = np.where(ds.variables['lon'][:] == site_lon)
 
         try: 
-            self.ceds_vocs_names.append(ds.__dict__['VOC_name'])
+            self.ceds_compounds[endpoint.replace('-em-anthro_CMIP_CEDS_2018.nc', '')] = ds.__dict__['VOC_name']
         except:
-            print(f"No VOC_name attribute for {path}")
+            self.ceds_compounds[endpoint.replace('-em-anthro_CMIP_CEDS_2018.nc', '')] = None
         
         data = []
         for var in ds.variables:
@@ -246,7 +245,7 @@ class DataFetcher():
     def make_ceds_df(self, lat, lon, nc_links):
         dfs = []
         for endpoint in nc_links:
-            df = self.get_compound_df('./data/2018/' + endpoint, lat, lon)
+            df = self.get_compound_df('./data/2018/' + endpoint, lat, lon, endpoint)
             dfs.append(df)
 
         full_df = dfs[0].join(dfs[1:], how='outer')
