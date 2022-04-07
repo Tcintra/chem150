@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 class Processor():
     """
@@ -38,17 +39,27 @@ class Processor():
 
         return df
     
-    def process(self, df, measurement, change_freq=False, select_method=False, drop_lat_lon=False):
+    def process(self, df, measurement, change_freq=False, select_method=False, drop_lat_lon=True, remove_duplicates=False):
         if select_method:
             df = df.loc[df['method'] == df['method'].unique()[0]].copy()
         df['datetime'] = pd.to_datetime(df['date_local'] + ' ' + df['time_local'])
         df = df[['datetime', 'sample_measurement', 'latitude', 'longitude']]
         df = df.rename({'sample_measurement': measurement}, axis=1)
+
+        # TODO: Fix this, currently just select the first year period to avoid duplicate index, but this might select the wrong data
+        duplicates = df.duplicated(subset='datetime', keep='first')
+        duplicates = np.where(duplicates)[0]
+        if len(duplicates) > 0:
+            df = df.iloc[:duplicates[0]]
+        
         df.set_index(['datetime'], inplace=True)
-        if change_freq:
+
+        if change_freq: 
+            print(df.head())
             df = df.asfreq('1h', method='ffill')
         if drop_lat_lon:
             df = df.drop(['latitude', 'longitude'], axis=1)
+
         return df
         
     def join(self, dfs):

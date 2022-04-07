@@ -6,6 +6,7 @@ from dateutil.relativedelta import relativedelta
 import numpy as np
 import netCDF4 as nc
 from bs4 import BeautifulSoup
+import json
 
 from preprocessing import Processor
 
@@ -27,6 +28,40 @@ LIST_SITES_BY_COUNTY = 'list/sitesByCounty'
 LIST_CBSAs = 'list/cbsas'
 LIST_PARAM_CLASSES = 'list/classes'
 LIST_PARAM_IN_CLASS = 'list/parametersByClass'
+
+CEDS_AQS_MAP = {
+    'ALD2' : {'include' : True, 'matches' : ['Acetaldehyde'], 'notes':'not lumped'},
+    'ALK4_butanes' : {'include' : True, 'matches' : ['2,2-Dimethylbutane', '2,3-Dimethylbutane', 'Isobutane', 'n-Butane', '2,2,3-Trimethylbutane'], 'notes' : 'lumped'}, 
+    'ALK4_hexanes' : {'include' : True, 'matches' : ['n-Hexane','Cyclohexane', '3-Methylhexane','Methylcyclohexane','2-Methylhexane','2,4-Dimethylhexane','2,3-Dimethylhexane','3-Ethylhexane','Ethylcyclohexane','2-Methylhexane & cyclohexane','2,2,4-Trimethylhexane','2,5-Dimethylhexane'],  'notes' : 'lumped'},
+    'ALK4_pentanes' : {'include' : True, 'matches' : ['n-Pentane','Isopentane','3-Methylpentane','Cyclopentane','2,2,4-Trimethylpentane','2,3,4-Trimethylpentane','Methylcyclopentane','2-Methylpentane','2,3-Dimethylpentane','2-2-3-Trimethylpentane','Isopentane & cyclopentane','Methylcyclopentane & 2,4-dimethylpentane','cis-1,2-Dimethylcyclopentane','trans-1,3-Dimethylcyclopentane', '2-Methylheptane', '2-Methylheptane & 3-Methylheptane', 'n-Heptane', '3-Methylheptane', 'Heptane','2,2-Dimethylheptane','4-Methylheptane', 'n-Octane', 'n-Nonane','Isomers of dodecane'], 'notes' : 'lumped'},
+    'BC' : {'include' : True, 'matches' : ['Black carbon PM2.5 STP', 'Black Carbon PM2.5 Corrected', 'Black Carbon PM10 LC'], 'notes' : 'Black Carbon (aerosol)'},
+    'BENZ' : {'include' : True, 'matches' : ['Benzene'], 'notes' : 'not lumped.'},
+    'BUTENE' : {'include' : True, 'matches' : ['1-Butene', 'cis-2-Butene', 'trans-2-Butene', '1-Pentene','trans-2-Pentene,cis-2-Pentene','4-Methyl-1-pentene','2-Methyl-2-pentene','2,3-Dimethyl-2-pentene','2-Methyl-1-pentene','2,4,4-Trimethyl-1-pentene','2,4,4-Trimethyl-2-pentene','Cyclopentene','cis-4-Methyl-2-pentene','3-Methyl-1-butene & cyclopentene','2-Methyl-2-butene & 1-pentene','4-Methylpentene & 3-methylpentene','3-Methyl-1-butene & Cyclopentene','1-Hexene & 2-Methyl-1-pentene'], 'notes' : 'These stand for other_alkenes_and_alkynes <- super weird category, sometimes also called "isomers of pentene".'},
+    'C2H2' : {'include' : True, 'matches' : ['Acetylene'], 'notes' : 'not lumped'},
+    'C2H4' : {'include' : True, 'matches' : ['Ethylene'], 'notes' : 'not lumped'},
+    'C2H6' : {'include' : True, 'matches' : ['Ethane'], 'notes' : 'not lumped'},
+    'C3H8' : {'include' : True, 'matches' : ['Propane'], 'notes' : 'not lumped'},
+    'CH2O' : {'include' : True, 'matches' : ['Formaldehyde'], 'notes' : 'not lumped'},
+    'CHC' : {'include' : True, 'matches' : [], 'notes' : 'lumped. There are a bunch, but we dn not need them. Some names are “obvious” like 1,1,1-Trichloro-2,2-bis (p-chlorophenyl) ethane but others are pesticides with chemical company names like Endrin'},
+    'CO' : {'include' : True, 'matches' : ['CO'],'notes' : ''},
+    'CO2' : {'include' : False, 'matches' : [], 'notes' : ''},
+    'EOH' : {'include' : False, 'matches' : [], 'notes' : 'not lumped (ethanol)'},
+    'ESTERS' : {'include' : True, 'matches' : ['n-Propyl acetate', 'Ethyl acrylate', 'n-Butyl acrylate', 'Methyl methacrylate', 'Vinyl acetate', 'Butyl acetate'], 'notes' : 'lumped'},
+    'ETHERS' : {'include' : False, 'matches' : [], 'notes' :'probably can just ignore these'},
+    'HCOOH' : {'include' : False, 'matches' : [], 'notes' : 'Does not look like it is in the EPA dataset'},
+    'MEK' : {'include' : True, 'matches' : ['Methyl ethyl ketone & methacrolein', 'Methyl ethyl ketone', 'Methacrolein'], 'notes' : 'MEK and Methacrolein are usually lumped together - same mass so measured as one often'},
+    'N2O' : {'include' : False, 'matches' : [], 'notes' : 'It is code 42605 - we can skip it'},
+    'NH3' : {'include' : True, 'matches' : ['Ammonia'], 'notes' : 'only 42604.'},
+    'NO' : {'include' : True, 'matches' : ['Nitric oxide (NO)'], 'notes' : 'I am not sure if any of these are nitric oxide.'},
+    'OC' : {'include' : True, 'matches' : ['Organic carbon PM10 STP', 'Organic Carbon Mass PM2.5 LC'], 'notes' : 'Organic Carbon, meaning organic aerosol.'},
+    'OTHER_AROM' : {'include' : False, 'matches' : [], 'notes': 'pretty much everything else that ends with “benzene”, “toluene”,or “xylene” that is not included in BENZ, TOLU, XYLE, and TMB goes here. We can skip them though'},
+    'OTHER_VOC' : {'include' : False, 'matches' : [], 'notes' : 'many of the AQS ones could, but anything relegated to “other” takes part in almost no interesting chemistry, so we can skip them'},
+    'PRPE' : {'include' : True, 'matches' : ['Propylene'], 'notes' : ''},
+    'SO2' : {'include' : True, 'matches' : ['Sulfur dioxide', 'SO2 max 5-min avg'], 'notes' : ''},
+    'TMB' : {'include' : True, 'matches' : ['1,2,3-Trimethylbenzene', '1,2,4-Trimethylbenzene', '1,3,5-Trimethylbenzene'], 'notes' : ''},
+    'TOLU' : {'include' : True, 'matches' : ['Toluene'], 'notes' : 'not lumped'},
+    'XYLE' : {'include' : True, 'matches' : ['m/p Xylene','m-Xylene', 'o-Xylene','p-Xylene','Xylene(s)'], 'notes' : ''}
+}
 
 class DataFetcher():
     """
@@ -193,8 +228,8 @@ class DataFetcher():
             if df.empty:
                 print(f"No data for {voc}")
                 continue
-            
-            df = self.processor.process(df, voc, change_freq=True, select_method=True, drop_lat_lon=True)
+
+            df = self.processor.process(df, voc, change_freq=False, select_method=True, drop_lat_lon=True, remove_duplicates=True)
             dfs.append(df)
         
         return self.processor.join(dfs)
@@ -227,10 +262,7 @@ class DataFetcher():
         lat_idx = np.where(ds.variables['lat'][:] == site_lat)
         lon_idx = np.where(ds.variables['lon'][:] == site_lon)
 
-        try: 
-            self.ceds_compounds[endpoint.replace('-em-anthro_CMIP_CEDS_2018.nc', '')] = ds.__dict__['VOC_name']
-        except:
-            self.ceds_compounds[endpoint.replace('-em-anthro_CMIP_CEDS_2018.nc', '')] = None
+        self.ceds_compounds[endpoint.replace('-em-anthro_CMIP_CEDS_2018.nc', '')] = endpoint
         
         data = []
         for var in ds.variables:
@@ -253,7 +285,9 @@ class DataFetcher():
         # NOTE: Not sure how to convert to timestamp so I will just convert to the first of the month for the given year
         start = datetime.datetime(2018, 1, 1, 0, 0)
         dates = [start + relativedelta(months=i) for i in range(0, 12)]
-        full_df.index = dates 
+        full_df['datetime'] = dates
+        full_df.index = full_df['datetime']
+        full_df = full_df.drop(['datetime'], axis=1)
         full_df.loc[datetime.datetime(2018, 12, 31, 23, 0)] = full_df.loc[datetime.datetime(2018, 12, 1)] # Repeat last row
         full_df = full_df.asfreq(freq='1h', method='ffill')
 
@@ -272,6 +306,32 @@ class DataFetcher():
             ndf = ndf.drop(cols, axis=1)
             ndf[compound] = compound_aggregated
         return ndf
+    
+    def get_ceds_data(self, year, lat=34.25, lon=-118.25, keep=[]):
+        """
+        Get aggregated CEDS data for all compounds in keep 
+        """
+        nc_links, _ = self.get_ceds_links(year=year)
+        nc_links = [link for link in nc_links if link.replace('-em-anthro_CMIP_CEDS_2018.nc', '') in keep]
+        ceds_df = self.make_ceds_df(lat, lon, nc_links)
+        return self.aggregate_ceds_data(ceds_df)
+    
+    ### MISC ###
+    
+    def get_final_compounds(self):
+        with open('voc_data.json', 'r') as f:
+            voc_r = json.load(f)
+        vocs = sorted([self.find_name(code) for code in voc_r['Metadata']['codes']])
+        # Get all vocs in AQS that have emissions recorded by CEDS and
+        matched_vocs = set()
+        for k in CEDS_AQS_MAP:
+            for match in CEDS_AQS_MAP[k]['matches']:
+                matched_vocs.add(match)
+        final_vocs = [x for x in vocs if x in matched_vocs]
+        # Get all emissions recorded by CEDS that are used by a VOC in AQS data
+        final_emissions = [k for k in CEDS_AQS_MAP if len(set(CEDS_AQS_MAP[k]['matches']) & set(final_vocs)) != 0]
+
+        return final_vocs, final_emissions
 
 ### =========================VARIABLES============================== ###
 
