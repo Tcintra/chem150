@@ -7,11 +7,16 @@ import numpy as np
 import netCDF4 as nc
 from bs4 import BeautifulSoup
 import json
+import os
+from dotenv import load_dotenv
 
 from preprocessing import Processor
 
-EMAIL = "tcintra@hmc.edu" # Should transition to env
-KEY = 'russetwren13'
+# Sample env vars:
+# EMAIL="example@example.com"
+# KEY="example"
+
+load_dotenv()
 
 URL = 'https://aqs.epa.gov/data/api/'
 
@@ -65,13 +70,14 @@ CEDS_AQS_MAP = {
 
 class DataFetcher():
     """
-    Python API to queury from AQD data API
+    Python API to queury from AQS database.
     """
 
     def __init__(self):
+        # params define the access tokens to query AQS database
         self.params = {
-            'email': EMAIL,
-            'key': KEY}
+            'email': os.getenv("EMAIL"),
+            'key': os.getenv("KEY")}
         self.all_codes = self.get_codes('list/parametersByClass', all=True, nparams={'pc':'ALL'})
         self.all_codes = pd.DataFrame(self.all_codes).set_index('code')
         self.processor = Processor()
@@ -82,6 +88,20 @@ class DataFetcher():
         """
         Search for codes for a particular filter. Either show all results or search 
         for specific value.
+
+        Parameters:
+            filter_url: String - Endpoint of AQS query. Example: 'list/states'
+            all: bool - Whether to return all codes for this endpoint or filter for some value
+            value: String - Value to filter by
+            nparams: dict - Required parameters for some AQS queries
+        
+        Returns:
+            HTTP Response Data: json or pd.DataFrame
+
+        Example: 
+        
+        >>> DataFetcher().get_codes(LIST_PARAM_IN_CLASS, all=False, value='Carbon monoxide', nparams={'pc':'CRITERIA'})
+        42101
         """
         # Try to get code from the all_codes if possible:
         params = self.params.copy()
@@ -96,6 +116,24 @@ class DataFetcher():
             return search['code']
     
     def get_data(self, data_url, param, bdate, edate, df=False, nparams=None):
+        """
+        Queries AQS for data from data_url
+
+        Parameters:
+            data_url: String - Endpoint of AQS query. Example: 'sampleData/bySite'.
+            param: String - Parameter to query
+            bdate: int - First data entry time.
+            edate: int - Last data entry time.
+            df: bool - Whether to return output as dataframe.
+            nparams: dict - Required parameters for some AQS queries
+        
+        Returns:
+            HTTP Response Data: json or pd.DataFrame
+
+        Example: 
+        
+        DataFetcher().get_data(SAMPLE_DATA_BY_STATE, 42101, 20180101, 20181231, df=True, nparams={'state':06})
+        """
         params = self.params.copy()
         params['param'] = param
         params['bdate'] = bdate
@@ -113,6 +151,15 @@ class DataFetcher():
             print(r.json())
     
     def find_code(self, value, verbose=False):
+        """
+        Find code for a particular value (eg. 'Ozone')
+
+        Parameters:
+            value: String - Value to search for.
+        
+        Returns:
+            code: int - The code you are searching for.
+        """
         # Look for code in self.all_codes
         try:
             code = self.all_codes.loc[self.all_codes['value_represented'] == value].index[0]
@@ -124,6 +171,9 @@ class DataFetcher():
             # print(e)
     
     def find_name(self, code):
+        """
+        Inverse of find_code(...)
+        """
         # Look for code in self.all_codes
         try:
             code = self.all_codes.loc[code].value_represented
@@ -132,44 +182,60 @@ class DataFetcher():
             print(f"Could not find {code}.")
             # print(e)
     
-    def create_dataset(self, bdate, edate, site=None, county=None, state=None, processed=True, verbose=False, vocs=False):
+    def create_dataset(self, bdate, edate, site=None, county=None, state=None, processed=True, verbose=False):
+        """
+        Generates core dataset (CRITERIA pollutants and MET vars).
+
+        Parameters:
+            bdate: int - First data entry time.
+            edate: int - Last data entry time.
+            site: String - Site code.
+            count: String - County code.
+            state: String - State code.
+            processed: True - Whether to run dataset through processor class.
+        
+        Returns:
+            HTTP Response Data: json or pd.DataFrame
+
+        Example: 
+        
+        DataFetcher().create_dataset(20200101, 20200102, site='1103', county='037', state='06', processed=True, verbose=False)
+        """
         code_names = [*CRITERIA_POLLUTANTS, *MET_VARS]
-        if vocs:
-            voc_code_names = [self.all_codes.loc[code]['value_represented'] for code in self.voc_codes]
-            code_names += voc_code_names
         
         codes = [self.find_code(v) for v in code_names]
         dct = {codes[i]: code_names[i] for i in range(len(codes))}
 
         dfs = []
-        if state:
-            if county:
-                if site:
-                    for code in codes:
-                        if verbose:
-                            print(f"\n Fetching data for {dct[code]}...", end="\n\n")
-                        
-                        df = self.get_data(SAMPLE_DATA_BY_SITE, code, bdate, edate, df=True, nparams={'state':state, 'county':county, 'site': site})
+        for code in codes:
+            if verbose:
+                print(f"\n Fetching data for {dct[code]}...", end="\n\n")
+            
+            df = self.get_data(SAMPLE_DATA_BY_SITE, code, bdate, edate, df=True, nparams={'state':state, 'county':county, 'site': site})
 
-                        if df.empty:
-                            print(f"No data for {dct[code]}")
-                            continue
-                        
-                        if processed:
-                            df = self.processor.process(df, dct[code])
+            if df.empty:
+                print(f"No data for {dct[code]}")
+                continue
+            
+            if processed:
+                df = self.processor.process(df, dct[code])
 
-                        dfs.append(df)
+            dfs.append(df)
 
-            # TODO: rest of logic for non-site
-
-        else:
-            raise Exception("Please enter state/county/site codes.")
-        
         return self.processor.join(dfs)
     
     def find_best_location(self, state='06', county='037', bdate=20000101, edate=20210101):
         """
-        Go through all sites in los angeles county and find site with the most dfs
+        Go through all sites in county and find site with the most data
+
+        Parameters:
+            bdate: int - First data entry time.
+            edate: int - Last data entry time.
+            site: String - Site code.
+            county: String - County code.
+        
+        Returns:
+            dict - Output of search.
         """
         print(f"Searching county {county} in state {state}...", end=" ")
         sites = self.get_codes(LIST_SITES_BY_COUNTY, all=True, nparams={'state':state, 'county':county})
@@ -192,6 +258,9 @@ class DataFetcher():
         return res
     
     def find_data_availability(self, site, county, state, code, bdate, edate):
+        """
+        Helper function for find_best_location()
+        """
         try:
             df = self.get_data(SAMPLE_DATA_BY_SITE, code, bdate, edate, df = True, nparams={'state':state, 'county':county, 'site': site})
             return not (df.empty)
@@ -199,6 +268,11 @@ class DataFetcher():
             return -1
     
     def find_voc_availability(self, sites, sites_codes, dates, state='06', county='037'):
+        """
+        Go through all sites in county and find site with the most VOC data
+
+        Please refer to lab_notebook.ipynb for example usage.
+        """
         codes = [r['code'] for r in self.get_codes(LIST_PARAM_IN_CLASS, all=True, nparams={'pc':'PAMS_VOC'})]
         self.voc_codes = codes 
 
@@ -215,11 +289,27 @@ class DataFetcher():
         return res
     
     def sample_day_in_year(self, bdate, edate):
+        """
+        Helper function.
+        """
         # Sample random day in every year
         sample_date = random.choice(pd.date_range(start=str(bdate), end=str(edate)))
         return sample_date.date().strftime("%Y%m%d"), (sample_date.date() + datetime.timedelta(1)).strftime("%Y%m%d")
 
     def get_voc_data(self, bdate, edate, state, county, site, vocs):
+        """
+        Get dataset for VOCs
+
+        Parameters:
+            bdate: int - First data entry time.
+            edate: int - Last data entry time.
+            site: String - Site code.
+            county: String - County code.
+            state: String - State code.
+        
+        Returns:
+            pandas DataFrame.
+        """
         dfs = []
         for voc in vocs:
             code = self.find_code(voc)
@@ -239,6 +329,15 @@ class DataFetcher():
 
     # Get all URLS
     def get_ceds_links(self, year='2018'):
+        """
+        Web-scraping tool to get the links to all CEDS datasets.
+
+        Parameters:
+            year: String - Year to get data for.
+        
+        Returns:
+            Tuple([String], String) - Links to query from CEDS database and year url endpoint.
+        """
         url = 'http://ftp.as.harvard.edu/gcgrid/data/ExtData/HEMCO/CEDS/v2021-06/' + year + '/'
         self.ceds_url = url
         r = requests.get(url)
@@ -252,12 +351,19 @@ class DataFetcher():
         return nc_links, url
     
     def save_ceds_ncs(self):
+        """
+        Query the CEDS database for the emissions data and write it locally.
+        NOTE: This must run before any datasets are created for CEDS.
+        """
         if self.nc_links:
             for endpoint in self.nc_links:
                 r = requests.get(self.ceds_url + endpoint)
                 open('./data/2018/' + endpoint, 'wb').write(r.content)
 
     def get_compound_df(self, path, site_lat, site_lon, endpoint):
+        """
+        Helper function for make_ceds_df. Converts one CEDS netcdf file to a pandas df.
+        """
         ds = nc.Dataset(path, format="NETCDF4")
         lat_idx = np.where(ds.variables['lat'][:] == site_lat)
         lon_idx = np.where(ds.variables['lon'][:] == site_lon)
@@ -275,6 +381,17 @@ class DataFetcher():
         return df
 
     def make_ceds_df(self, lat, lon, nc_links):
+        """
+        Make dataframe with CEDS emissions.
+
+        Parameters:
+            lat: int - Latitude of relevant site.
+            lon: int - Longitude of relevant site.
+            nc_links: [String] - Endpoints of emissions data to query.
+        
+        Returns:
+            pandas DataFrame with CEDS emissions.
+        """
         dfs = []
         for endpoint in nc_links:
             df = self.get_compound_df('./data/2018/' + endpoint, lat, lon, endpoint)
@@ -319,6 +436,9 @@ class DataFetcher():
     ### MISC ###
     
     def get_final_compounds(self):
+        """
+        Get VOCs that have emissions in CEDS data and vice versa. Basically a set intersection.
+        """
         with open('voc_data.json', 'r') as f:
             voc_r = json.load(f)
         vocs = sorted([self.find_name(code) for code in voc_r['Metadata']['codes']])
